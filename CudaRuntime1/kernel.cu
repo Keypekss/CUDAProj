@@ -1,7 +1,9 @@
 ﻿#include <iostream>
 #include <thread>
+#include <cassert>
 #include <algorithm>
 #include <vector>
+#include <iomanip> 
 
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
@@ -22,35 +24,37 @@ struct Runner {
 };
 
 // comparison operator for Runner struct
-inline bool operator <(const Runner& lhs, const Runner& rhs)
+inline bool operator >(const Runner& lhs, const Runner& rhs)
 {
-    return lhs.Position < rhs.Position;
+    return lhs.Position > rhs.Position;
 }
 
 void PrintPositions(Runner runners[NumRunner]) {
     // array is sorted before printing so that the
     // result is in rank order
-    std::vector<Runner> temp(runners, runners + sizeof(runners) / sizeof(runners[0]));
-    std::sort(std::begin(temp), std::end(temp));
+    std::sort(runners, runners + NumRunner, std::greater<Runner>());
 
     for (int i = 0; i < NumRunner; i++) {
         std::cout << "\n";
-        std::cout << runners[i].ID << ": " << runners[i].Position;
+        std::cout << std::setw(3) << runners[i].ID << ": " << runners[i].Position;
     }
     std::cout << "\n\n";
 }
 
 __global__ void CalculateDisplacement(Runner runners[], bool* hasFinishedRace) {
    
-    int index = threadIdx.x;
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
 
     // prevent invoking more threads than number of runners
     if (index < NumRunner) {
-        // make runners run        
-        runners[index].Position += runners[index].Speed;
+        // make runners run     
+        for (int i = index; i < NumRunner; i += stride) {
+            runners[index].Position += runners[index].Speed;
 
-        if (runners[index].Position >= Distance) {
-            *hasFinishedRace = true;
+            if (runners[index].Position >= Distance) {
+                *hasFinishedRace = true;
+            }
         }
     }
 }
@@ -74,8 +78,14 @@ int main()
         runners[i].ID = i;
     }
 
+    // set total thread amount
+    const int numBlocks = 1;
+    const int numThreads = 128;
+    assert(numThreads % 32 == 0);
+    assert(numBlocks * numThreads > NumRunner);
+
     while (!*hasFinishedRace) {
-        CalculateDisplacement <<<1, 128>>> (runners, hasFinishedRace);
+        CalculateDisplacement <<<numBlocks, numThreads>>> (runners, hasFinishedRace);
         cudaDeviceSynchronize();
         std::this_thread::sleep_for(std::chrono::seconds(1));
         PrintPositions(runners);
